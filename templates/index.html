@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>High-Accuracy Enterprise Logistics & Multi-Map Navigation Engine</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f0f4f8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 95%;
+            max-width: 1400px;
+            background: white;
+            padding: 25px;
+            border-radius: 14px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        }
+        h2 { color: #2c3e50; margin-top: 0; border-bottom: 2px solid #ebedf0; padding-bottom: 12px; }
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 10px;
+            border: 2px solid #cbd5e1;
+            margin-top: 20px;
+        }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+            align-items: center;
+        }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        select, button {
+            padding: 12px 18px;
+            font-size: 14px;
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+            background: white;
+            font-weight: 500;
+        }
+        select:focus { outline: none; border-color: #3b82f6; }
+        .btn-compute { background: #1e293b; color: white; border: none; cursor: pointer; }
+        .btn-compute:hover { background: #0f172a; }
+
+        .table-container {
+            width: 100%;
+            margin-top: 20px;
+            overflow-x: auto;
+            display: none;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        th, td { padding: 14px 18px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        th { background-color: #f1f5f9; color: #475569; font-weight: 600; }
+
+        /* Hide default panel to keep look sleek */
+        .leaflet-routing-container { display: none !important; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🗺️ Real-Time GPS Route Matrix & Full-Stack Planner</h2>
+    <p>Fetches live road geometries via the <strong>OSRM API</strong> and dynamically logs calculated telemetry directly to your local Python SQLite database database.</p>
+
+    <div class="controls">
+        <div class="control-group">
+            <label><strong>Origin City:</strong></label>
+            <select id="startNode"></select>
+        </div>
+        <div class="control-group">
+            <label><strong>Destination City:</strong></label>
+            <select id="endNode"></select>
+        </div>
+        <div class="control-group">
+            <label><strong>Vehicle Type:</strong></label>
+            <select id="vehicleType">
+                <option value="PETROL">Petrol/Diesel Car (Range: 600km)</option>
+                <option value="EV">Electric Vehicle (Range: 350km)</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label><strong>Live Weather:</strong></label>
+            <select id="weatherCondition">
+                <option value="CLEAR">☀️ Clear Skies (Normal Speeds)</option>
+                <option value="RAIN">🌧️ Heavy Monsoon Rain (-25% Speed)</option>
+                <option value="FOG">🌫️ Dense Fog (-50% Speed)</option>
+            </select>
+        </div>
+        <button class="btn-compute" onclick="calculateExactLiveRoute()">Compute Exact Path</button>
+    </div>
+
+    <div class="table-container" id="tableDashboard">
+        <table>
+            <thead>
+                <tr>
+                    <th>Navigation Metric</th>
+                    <th>Real-World GPS Value</th>
+                    <th>Logistics & Cost Projections</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody">
+                <tr><td><b>Total Precision Road Distance</b></td><td id="resDist">-</td><td>Based on exact highway map curves</td></tr>
+                <tr><td><b>Estimated Trip Duration</b></td><td id="resTime">-</td><td id="resWeatherLabel">Adjusted for weather conditions</td></tr>
+                <tr><td><b>NHAI Toll Plaza Summary</b></td><td id="resTolls">-</td><td id="resTollCost">-</td></tr>
+                <tr><td><b>Energy & Refueling Logistics</b></td><td id="resStops">-</td><td id="resEnergyCost">-</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+<script>
+    const indiaGeoMap = {
+        "Delhi": [28.6139, 77.2090], "Jaipur": [26.9124, 75.7873], "Ahmedabad": [23.0225, 72.5714],
+        "Surat": [21.1702, 72.8311], "Mumbai": [19.0760, 72.8777], "Pune": [18.5204, 73.8567],
+        "Bengaluru": [12.9716, 77.5946], "Chennai": [13.0827, 80.2707], "Vijayawada": [16.5062, 80.6480],
+        "Visakhapatnam": [17.6868, 83.2185], "Kolkata": [22.5726, 88.3639], "Hyderabad": [17.3850, 78.4867],
+        "Nagpur": [21.1458, 79.0882], "Lucknow": [26.8467, 80.9462], "Tadepalligudem": [16.8329, 81.5273],
+        "Bhimavaram": [16.5449, 81.5212], "Eluru": [16.7107, 81.1035], "Rajahmundry": [17.0005, 81.8040]
+    };
+
+    const startSelect = document.getElementById('startNode');
+    const endSelect = document.getElementById('endNode');
+    Object.keys(indiaGeoMap).sort().forEach(city => {
+        startSelect.options.add(new Option(city, city));
+        endSelect.options.add(new Option(city, city));
+    });
+    startSelect.value = "Mumbai";
+    endSelect.value = "Rajahmundry";
+
+    // Initialize Map Layers Toggle setups matching Google styles
+    const streetMapLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
+    const satelliteMapLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
+    const terrainMapLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png');
+
+    const map = L.map('map', { center: [20.5937, 78.9629], zoom: 5, layers: [streetMapLayer] });
+    L.control.layers({ "🗺️ Street View": streetMapLayer, "🛰️ Satellite View": satelliteMapLayer, "⛰️ Terrain View": terrainMapLayer }, null, { collapsed: false }).addTo(map);
+
+    for (let city in indiaGeoMap) { L.marker(indiaGeoMap[city]).addTo(map).bindPopup(`<b>${city} Hub</b>`); }
+
+    let routingControlInstance = null;
+
+    function calculateExactLiveRoute() {
+        const startCity = startSelect.value;
+        const endCity = endSelect.value;
+        const vehicle = document.getElementById("vehicleType").value;
+        const weather = document.getElementById("weatherCondition").value;
+
+        if (startCity === endCity) { alert("Origin and Destination must be different!"); return; }
+        const startCoords = indiaGeoMap[startCity];
+        const endCoords = indiaGeoMap[endCity];
+
+        if (routingControlInstance !== null) { map.removeControl(routingControlInstance); }
+
+        routingControlInstance = L.Routing.control({
+            waypoints: [L.latLng(startCoords[0], startCoords[1]), L.latLng(endCoords[0], endCoords[1])],
+            router: L.Routing.osrmv1({ serviceUrl: `https://router.project-osrm.org/route/v1` }),
+            lineOptions: { styles: [{ color: '#ff4d4d', opacity: 0.85, weight: 6 }] },
+            addWaypoints: false, draggableWaypoints: false, fitSelectedRoutes: true
+        }).addTo(map);
+
+        routingControlInstance.on('routesfound', function(e) {
+            const routes = e.routes;
+            const primaryRoute = routes[0];
+            const exactDistanceKM = (primaryRoute.summary.totalDistance / 1000).toFixed(1);
+
+            let baseSpeedKMH = 85;
+            let weatherNote = "☀️ Baseline highway transit velocity active.";
+            if (weather === "RAIN") { baseSpeedKMH = 60; weatherNote = "🌧️ Slowdown triggered due to Heavy Monsoon Rain."; }
+            if (weather === "FOG") { baseSpeedKMH = 40; weatherNote = "🌫️ Severe velocity reduction due to Dense Fog conditions."; }
+            const travelDurationHours = (exactDistanceKM / baseSpeedKMH).toFixed(1);
+
+            const calculatedTollPlazas = Math.max(1, Math.round(exactDistanceKM / 75));
+            const standardTollCost = calculatedTollPlazas * 145;
+
+            const operatingRangeLimit = vehicle === "EV" ? 350 : 600;
+            const requiredStops = Math.floor(exactDistanceKM / operatingRangeLimit);
+            const stopDescription = vehicle === "EV" ? `${requiredStops} EV Recharging Stops` : `${requiredStops} Fuel Stops`;
+            const estimatedEnergyExpense = vehicle === "EV" ? `₹${(exactDistanceKM * 2.5).toFixed(0)}` : `₹${(exactDistanceKM * 7.5).toFixed(0)}`;
+
+            document.getElementById("tableDashboard").style.display = "block";
+            document.getElementById("resDist").innerHTML = `<b>${exactDistanceKM} KM</b>`;
+            document.getElementById("resTime").innerHTML = `<b>${travelDurationHours} Hours</b>`;
+            document.getElementById("resWeatherLabel").innerHTML = weatherNote;
+            document.getElementById("resTolls").innerHTML = `<b>${calculatedTollPlazas} Active Plazas</b>`;
+            document.getElementById("resTollCost").innerHTML = `Total Charges: <b>₹${standardTollCost} INR</b>`;
+            document.getElementById("resStops").innerHTML = `<b>${stopDescription}</b>`;
+            document.getElementById("resEnergyCost").innerHTML = `Est. Energy Cost: <b>${estimatedEnergyExpense} INR</b>`;
+
+            // =========================================================================
+            // NEW PIPELINE INTERACTION: ASYNC POST TRANSMISSION PACKET TO FLASK
+            // =========================================================================
+            const telemetryPacket = {
+                origin: startCity,
+                destination: endCity,
+                distance: exactDistanceKM + " KM",
+                duration: travelDurationHours + " Hours",
+                toll_cost: "₹" + standardTollCost,
+                vehicle: vehicle
+            };
+
+            fetch('/api/log_trip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(telemetryPacket)
+            })
+            .then(res => res.json())
+            .then(data => console.log("Database Status Log:", data.message))
+            .catch(err => console.error("Database connection lost:", err));
+        });
+    }
+
+    calculateExactLiveRoute();
+</script>
+
+</body>
+</html>
